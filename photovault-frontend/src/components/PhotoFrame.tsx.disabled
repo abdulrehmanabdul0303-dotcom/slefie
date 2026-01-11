@@ -1,0 +1,97 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import { Text, useTexture } from "@react-three/drei";
+import { motion } from "framer-motion";
+import * as THREE from "three";
+
+interface PhotoFrameProps {
+  memory: {
+    id: string;
+    url: string;
+    thumbnail?: string;
+    title?: string;
+  };
+  position: [number, number, number];
+  rotation?: [number, number, number];
+}
+
+/**
+ * Photo Frame - Memory displayed on 3D wall
+ * Interactive: hover and click to view
+ */
+export default function PhotoFrame({
+  memory,
+  position,
+  rotation = [0, 0, 0],
+}: PhotoFrameProps) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const [hovered, setHovered] = useState(false);
+  const [clicked, setClicked] = useState(false);
+  const { camera } = useThree();
+
+  // Load texture (with fallback)
+  const texture = useTexture(memory.thumbnail || memory.url, undefined, (error) => {
+    console.warn("Failed to load texture:", error);
+  });
+
+  // Animate on hover
+  useFrame(() => {
+    if (meshRef.current) {
+      if (hovered) {
+        meshRef.current.scale.lerp(new THREE.Vector3(1.1, 1.1, 1.1), 0.1);
+        meshRef.current.position.lerp(
+          new THREE.Vector3(...position).add(new THREE.Vector3(0, 0, 0.2)),
+          0.1
+        );
+      } else {
+        meshRef.current.scale.lerp(new THREE.Vector3(1, 1, 1), 0.1);
+        meshRef.current.position.lerp(new THREE.Vector3(...position), 0.1);
+      }
+    }
+  });
+
+  const handleClick = () => {
+    setClicked(true);
+    // Open full image view (can be extended)
+    window.open(memory.url, "_blank");
+    setTimeout(() => setClicked(false), 1000);
+  };
+
+  return (
+    <group position={position} rotation={rotation}>
+      {/* Frame border */}
+      <mesh
+        ref={meshRef}
+        onPointerOver={() => setHovered(true)}
+        onPointerOut={() => setHovered(false)}
+        onClick={handleClick}
+        position={[0, 0, 0.01]}
+      >
+        <boxGeometry args={[1.4, 1, 0.05]} />
+        <meshStandardMaterial color="#8b7355" metalness={0.3} roughness={0.7} />
+      </mesh>
+
+      {/* Photo */}
+      <mesh position={[0, 0, 0.03]}>
+        <planeGeometry args={[1.2, 0.8]} />
+        <meshStandardMaterial map={texture} />
+      </mesh>
+
+      {/* Hover indicator */}
+      {hovered && (
+        <Text
+          position={[0, -0.6, 0.05]}
+          fontSize={0.1}
+          color="white"
+          anchorX="center"
+          anchorY="middle"
+        >
+          Click to view
+        </Text>
+      )}
+    </group>
+  );
+}
+

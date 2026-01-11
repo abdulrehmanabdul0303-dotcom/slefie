@@ -1,0 +1,15 @@
+c
+# Large build/zip files
+*.zip
+photovault-frontend.zip
+
+
+# Large files
+*.zip
+photovault-frontend.zip
+
+
+# Django collected static
+staticfiles/
+photovault_django/staticfiles/
+

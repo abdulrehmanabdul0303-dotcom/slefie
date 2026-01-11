@@ -1,0 +1,259 @@
+name: PhotoVault CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: photovault_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      working-directory: ./photovault_django
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff black bandit pip-audit pytest pytest-cov pytest-django
+    
+    - name: Create test environment file
+      working-directory: ./photovault_django
+      run: |
+        cat > .env << EOF
+        DEBUG=True
+        SECRET_KEY=test-secret-key-for-ci-only
+        DATABASE_URL=postgresql://postgres:postgres@localhost:5432/photovault_test
+        REDIS_URL=redis://localhost:6379/0
+        ALLOWED_HOSTS=localhost,127.0.0.1
+        CORS_ALLOWED_ORIGINS=http://localhost:3000
+        PHOTOVAULT_ENCRYPTION_KEY=test-encryption-key-32-chars-long
+        FRONTEND_URL=http://localhost:3000
+        EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+        EOF
+    
+    - name: Lint with ruff
+      working-directory: ./photovault_django
+      run: ruff check .
+    
+    - name: Check formatting with black
+      working-directory: ./photovault_django
+      run: black --check .
+    
+    - name: Security scan with bandit
+      working-directory: ./photovault_django
+      run: bandit -r . -x tests/ -q
+    
+    - name: Dependency vulnerability scan
+      working-directory: ./photovault_django
+      run: pip-audit
+    
+    - name: Django system check
+      working-directory: ./photovault_django
+      run: python manage.py check --deploy
+    
+    - name: Run migrations
+      working-directory: ./photovault_django
+      run: python manage.py migrate
+    
+    - name: Run tests
+      working-directory: ./photovault_django
+      run: |
+        python test_api_direct.py
+        # pytest --cov=. --cov-report=xml --cov-fail-under=80
+    
+    - name: Upload coverage reports
+      if: success()
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./photovault_django/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: './photovault-frontend/package-lock.json'
+    
+    - name: Install dependencies
+      working-directory: ./photovault-frontend
+      run: npm ci
+    
+    - name: Lint with ESLint
+      working-directory: ./photovault-frontend
+      run: npm run lint
+    
+    - name: Check types with TypeScript
+      working-directory: ./photovault-frontend
+      run: npm run type-check
+    
+    - name: Run tests
+      working-directory: ./photovault-frontend
+      run: npm run test
+    
+    - name: Build application
+      working-directory: ./photovault-frontend
+      run: npm run build
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./photovault_django
+        push: true
+        tags: |
+          photovault/backend:latest
+          photovault/backend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./photovault-frontend
+        push: true
+        tags: |
+          photovault/frontend:latest
+          photovault/frontend:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - name: Deploy to staging server
+      run: |
+        echo "Deploying to staging environment"
+        # Add actual deployment commands here
+        # e.g., SSH to server, pull images, restart services
+    
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests on staging"
+        # Add smoke test commands here
+        # curl -f https://staging.photovault.com/health/
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Deploy to production server
+      run: |
+        echo "Deploying to production environment"
+        # Add actual deployment commands here
+    
+    - name: Run production smoke tests
+      run: |
+        echo "Running smoke tests on production"
+        # Add production smoke test commands here
+    
+    - name: Notify team
+      if: success()
+      run: |
+        echo "Production deployment successful!"
+        # Add notification logic (Slack, email, etc.)

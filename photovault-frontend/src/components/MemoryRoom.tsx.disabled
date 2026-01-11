@@ -1,0 +1,207 @@
+/* @ts-nocheck */
+"use client";
+
+import { Suspense, useState, useEffect } from "react";
+import { Canvas } from "@react-three/fiber";
+import { Environment, PointerLockControls, OrbitControls, Text } from "@react-three/drei";
+import { motion } from "framer-motion";
+import PhotoFrame from "./PhotoFrame";
+import { X, Maximize2 } from "lucide-react";
+import { GlassCard } from "./GlassCard";
+
+interface Memory {
+  id: string;
+  url: string;
+  thumbnail?: string;
+  title?: string;
+}
+
+interface MemoryRoomProps {
+  memories: Memory[];
+  onClose?: () => void;
+  albumName?: string;
+}
+
+/**
+ * 3D Memory Room - Walk through your memories
+ * Albums = 3D rooms, Photos = frames on walls
+ */
+export default function MemoryRoom({ memories, onClose, albumName = "Memories" }: MemoryRoomProps) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [instructions, setInstructions] = useState(true);
+
+  useEffect(() => {
+    // Hide instructions after 5 seconds
+    const timer = setTimeout(() => setInstructions(false), 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Arrange photos on walls (front wall, left wall, right wall)
+  const frontWallPhotos = memories.slice(0, Math.ceil(memories.length / 3));
+  const leftWallPhotos = memories.slice(
+    Math.ceil(memories.length / 3),
+    Math.ceil((memories.length * 2) / 3)
+  );
+  const rightWallPhotos = memories.slice(Math.ceil((memories.length * 2) / 3));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black">
+      {/* Controls overlay */}
+      <div className="absolute top-4 left-4 z-10 flex gap-2">
+        {onClose && (
+          <motion.button
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose}
+            className="glass px-4 py-2 rounded-xl text-white flex items-center gap-2"
+          >
+            <X className="w-4 h-4" />
+            Exit Room
+          </motion.button>
+        )}
+        <motion.button
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
+          onClick={() => {
+            if (!document.fullscreenElement) {
+              document.documentElement.requestFullscreen();
+              setIsFullscreen(true);
+            } else {
+              document.exitFullscreen();
+              setIsFullscreen(false);
+            }
+          }}
+          className="glass px-4 py-2 rounded-xl text-white flex items-center gap-2"
+        >
+          <Maximize2 className="w-4 h-4" />
+          {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+        </motion.button>
+      </div>
+
+      {/* Instructions */}
+      {instructions && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="absolute top-20 left-1/2 -translate-x-1/2 z-10"
+        >
+          <GlassCard>
+            <div className="text-white text-sm space-y-2">
+              <p className="font-semibold">🎮 Controls:</p>
+              <p>• Mouse: Look around</p>
+              <p>• WASD: Move</p>
+              <p>• Click photos to view</p>
+            </div>
+          </GlassCard>
+        </motion.div>
+      )}
+
+      {/* Room title */}
+      <div className="absolute top-4 right-4 z-10">
+        <GlassCard>
+          <h2 className="text-white text-lg font-semibold">{albumName}</h2>
+        </GlassCard>
+      </div>
+
+      {/* 3D Canvas */}
+      <Canvas camera={{ position: [0, 1.6, 5], fov: 75 }}>
+        {/* Lighting */}
+        <ambientLight intensity={0.4} />
+        <pointLight position={[0, 5, 0]} intensity={1} />
+        <pointLight position={[-5, 2, 5]} intensity={0.5} />
+        <pointLight position={[5, 2, 5]} intensity={0.5} />
+
+        <Environment preset="city" />
+
+        {/* Floor */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+          <planeGeometry args={[20, 20]} />
+          <meshStandardMaterial color="#1a1a1a" />
+        </mesh>
+
+        {/* Ceiling */}
+        <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 3, 0]}>
+          <planeGeometry args={[20, 20]} />
+          <meshStandardMaterial color="#0f0f0f" />
+        </mesh>
+
+        {/* Front Wall */}
+        <mesh position={[0, 1.5, -5]}>
+          <boxGeometry args={[10, 3, 0.1]} />
+          <meshStandardMaterial color="#111" />
+        </mesh>
+
+        {/* Left Wall */}
+        <mesh rotation={[0, Math.PI / 2, 0]} position={[-5, 1.5, 0]}>
+          <boxGeometry args={[10, 3, 0.1]} />
+          <meshStandardMaterial color="#111" />
+        </mesh>
+
+        {/* Right Wall */}
+        <mesh rotation={[0, -Math.PI / 2, 0]} position={[5, 1.5, 0]}>
+          <boxGeometry args={[10, 3, 0.1]} />
+          <meshStandardMaterial color="#111" />
+        </mesh>
+
+        {/* Photo Frames - Front Wall */}
+        {frontWallPhotos.map((memory, i) => {
+          const spacing = 10 / (frontWallPhotos.length + 1);
+          const x = -5 + spacing * (i + 1);
+          return (
+            <PhotoFrame
+              key={`front-${memory.id}`}
+              memory={memory}
+              position={[x, 1.6, -4.9]}
+              rotation={[0, 0, 0]}
+            />
+          );
+        })}
+
+        {/* Photo Frames - Left Wall */}
+        {leftWallPhotos.map((memory, i) => {
+          const spacing = 10 / (leftWallPhotos.length + 1);
+          const z = -5 + spacing * (i + 1);
+          return (
+            <PhotoFrame
+              key={`left-${memory.id}`}
+              memory={memory}
+              position={[-4.9, 1.6, z]}
+              rotation={[0, Math.PI / 2, 0]}
+            />
+          );
+        })}
+
+        {/* Photo Frames - Right Wall */}
+        {rightWallPhotos.map((memory, i) => {
+          const spacing = 10 / (rightWallPhotos.length + 1);
+          const z = -5 + spacing * (i + 1);
+          return (
+            <PhotoFrame
+              key={`right-${memory.id}`}
+              memory={memory}
+              position={[4.9, 1.6, z]}
+              rotation={[0, -Math.PI / 2, 0]}
+            />
+          );
+        })}
+
+        {/* Room Title in 3D */}
+        <Text
+          position={[0, 2.5, -4.8]}
+          fontSize={0.3}
+          color="white"
+          anchorX="center"
+          anchorY="middle"
+        >
+          {albumName}
+        </Text>
+
+        {/* Controls */}
+        <PointerLockControls />
+        <OrbitControls enablePan={false} minDistance={3} maxDistance={10} />
+      </Canvas>
+    </div>
+  );
+}
+

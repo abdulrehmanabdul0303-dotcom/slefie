@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: photovault_db
+      POSTGRES_USER: photovault
+      POSTGRES_PASSWORD: photovault_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - media_files:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://photovault:photovault_password@db:5432/photovault_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+
+  celery:
+    build: .
+    command: celery -A photovault worker -l info
+    volumes:
+      - .:/app
+      - media_files:/app/media
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DEBUG=True
+      - DATABASE_URL=postgresql://photovault:photovault_password@db:5432/photovault_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
+
+volumes:
+  postgres_data:
+  media_files:

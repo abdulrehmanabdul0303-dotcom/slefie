@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgvector extension
+  db:
+    image: pgvector/pgvector:0.5.1-pg15
+    container_name: photovault_db
+    environment:
+      POSTGRES_DB: photovault
+      POSTGRES_USER: photovault
+      POSTGRES_PASSWORD: photovault_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./selfie-connect-main/backend/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photovault -d photovault"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    networks:
+      - photovault_network
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: photovault_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+    networks:
+      - photovault_network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./selfie-connect-main/backend
+      dockerfile: deployment/Dockerfile
+    container_name: photovault_backend
+    ports:
+      - "8999:8999"
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://photovault:photovault_dev_password@db:5432/photovault
+      # Redis/Celery
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Security (use strong values in production)
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      CSRF_SECRET: ${CSRF_SECRET:-dev-csrf-secret-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      MASTER_KEY: ${MASTER_KEY:-dev-master-key-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      # Application
+      APP_ENV: ${APP_ENV:-development}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8999
+      METRICS_ALLOWED_IPS: 127.0.0.1,::1,redis,backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8999/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    volumes:
+      - ./selfie-connect-main/backend/storage:/app/storage
+      - ./selfie-connect-main/backend/app:/app/app
+    networks:
+      - photovault_network
+    restart: unless-stopped
+
+  # Celery Worker for Background Tasks
+  worker:
+    build:
+      context: ./selfie-connect-main/backend
+      dockerfile: deployment/Dockerfile
+    container_name: photovault_worker
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://photovault:photovault_dev_password@db:5432/photovault
+      # Redis/Celery
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Security
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      CSRF_SECRET: ${CSRF_SECRET:-dev-csrf-secret-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      MASTER_KEY: ${MASTER_KEY:-dev-master-key-change-me-to-a-very-long-secure-string-at-least-32-characters}
+      # Application
+      APP_ENV: ${APP_ENV:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./selfie-connect-main/backend/storage:/app/storage
+      - ./selfie-connect-main/backend/app:/app/app
+    networks:
+      - photovault_network
+    restart: unless-stopped
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./photovault-frontend
+      dockerfile: Dockerfile
+    container_name: photovault_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8999
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    networks:
+      - photovault_network
+    restart: unless-stopped
+
+networks:
+  photovault_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+

@@ -1,0 +1,58 @@
+import React from 'react';
+import { cn } from '@/lib/utils/cn';
+
+export interface SpinnerProps {
+  size?: 'sm' | 'md' | 'lg';
+  className?: string;
+}
+
+/**
+ * Spinner Component
+ * Loading indicator
+ */
+export const Spinner: React.FC<SpinnerProps> = ({ size = 'md', className }) => {
+  const sizeClasses = {
+    sm: 'w-4 h-4 border-2',
+    md: 'w-6 h-6 border-2',
+    lg: 'w-8 h-8 border-3',
+  };
+
+  return (
+    <div
+      className={cn(
+        'border-white/30 border-t-white rounded-full animate-spin',
+        sizeClasses[size],
+        className
+      )}
+    />
+  );
+};
+
+Spinner.displayName = 'Spinner';
+
+export interface SkeletonProps {
+  className?: string;
+  count?: number;
+}
+
+/**
+ * Skeleton Component
+ * Placeholder while content loads
+ */
+export const Skeleton: React.FC<SkeletonProps> = ({ className, count = 1 }) => {
+  return (
+    <>
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          className={cn(
+            'bg-white/10 rounded-lg animate-pulse',
+            className
+          )}
+        />
+      ))}
+    </>
+  );
+};
+
+Skeleton.displayName = 'Skeleton';

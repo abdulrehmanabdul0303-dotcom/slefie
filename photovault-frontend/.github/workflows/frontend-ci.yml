@@ -1,0 +1,63 @@
+name: Frontend CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: ['photovault-frontend/**']
+  pull_request:
+    branches: [ main ]
+    paths: ['photovault-frontend/**']
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: photovault-frontend/package-lock.json
+    
+    - name: Install dependencies
+      working-directory: ./photovault-frontend
+      run: npm ci
+    
+    - name: Run quality checks
+      working-directory: ./photovault-frontend
+      run: npm run quality
+    
+    - name: Run tests
+      working-directory: ./photovault-frontend
+      run: npm run test:coverage
+    
+    - name: Build for production
+      working-directory: ./photovault-frontend
+      run: npm run build
+      env:
+        NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: frontend-build
+        path: photovault-frontend/.next/
+
+  deploy-vercel:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to Vercel
+      uses: amondnet/vercel-action@v25
+      with:
+        vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+        working-directory: ./photovault-frontend

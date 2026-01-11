@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/photovault
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env.production
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    volumes:
+      - media_files:/app/media
+      - static_files:/app/staticfiles
+    networks:
+      - photovault_network
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=photovault
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    restart: unless-stopped
+    networks:
+      - photovault_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - photovault_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery:
+    build: .
+    command: celery -A photovault worker -l info --concurrency=2
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/photovault
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env.production
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    volumes:
+      - media_files:/app/media
+    networks:
+      - photovault_network
+
+  celery-beat:
+    build: .
+    command: celery -A photovault beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/photovault
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env.production
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    networks:
+      - photovault_network
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - static_files:/var/www/static:ro
+      - media_files:/var/www/media:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+    networks:
+      - photovault_network
+
+volumes:
+  postgres_data:
+  media_files:
+  static_files:
+
+networks:
+  photovault_network:
+    driver: bridge
